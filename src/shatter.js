@@ -1,6 +1,8 @@
 (function () {
   const T_HOLE = 1.079;
-  const T_FALL = 3.25;
+  const T_CRACK = 2.42;
+  const T_PHASE3 = 3.073;
+  const T_FALL = T_PHASE3 + 0.12;
   const DEFAULT_END = 4.458;
   const LINE_START = 0.34;
   const RAYS = 28;
@@ -194,8 +196,8 @@
 
   function lineFront(time) {
     if (time < T_HOLE) return 0;
-    const progress = clamp01((Math.min(time, T_FALL) - T_HOLE) / (T_FALL - T_HOLE));
-    const eased = 1 - Math.pow(1 - progress, 1.35);
+    const progress = clamp01((time - T_HOLE) / (T_CRACK - T_HOLE));
+    const eased = 1 - Math.pow(1 - progress, 1.75);
     return LINE_START + (1 - LINE_START) * eased;
   }
 
@@ -205,13 +207,17 @@
     let rot = 0;
     let crackGap = time >= T_HOLE && time <= T_FALL && shard.ring === 0 ? 1.7 : 0;
     if (time > T_FALL) {
-      const dt = Math.max(0, time - T_FALL - shard.lag * 0.04);
-      const speed = 0.48 + 0.22 * (1 - Math.min(shard.dist, 1)) + shard.drift * 0.08;
-      const drop = height * speed * dt + 0.5 * height * 5.8 * dt * dt;
-      dy = Math.min(drop, height * (1.35 - shard.cy));
-      dx = Math.cos(shard.angle) * height * 0.018 * Math.min(dt, 0.6);
-      rot = shard.spin * dt * dt * 1.05;
-      crackGap = Math.min(4.2, 1.2 + dt * 5);
+      const dt = time - T_FALL - shard.lag * 0.025;
+      if (dt > 0) {
+        const kick = 0.42 + shard.drift * 0.12;
+        const gravity = 9.2 + shard.drift * 0.8;
+        const drop = height * (kick * dt + 0.5 * gravity * dt * dt);
+        dy = Math.min(drop, height * (1.55 - shard.cy));
+        const slip = 1 - Math.exp(-dt * 9);
+        dx = Math.cos(shard.angle) * height * (0.008 + shard.drift * 0.01) * slip;
+        rot = shard.spin * (1.15 + shard.drift * 0.7) * dt;
+        crackGap = 2.2;
+      }
     }
     return { dx, dy, rot, crackGap };
   }
@@ -416,7 +422,7 @@
         drawTriangle(ctx, image, points[0], points[1], points[2]);
         drawTriangle(ctx, image, points[0], points[2], points[3]);
         const screenY = shard.cy * h + dy;
-        if (time > T_FALL && crackGap > 0.2 && screenY > -60 && screenY < h - 10) {
+        if (dy > 3 && screenY > -80 && screenY < h + 30) {
           ctx.beginPath();
           ctx.moveTo(points[0].x, points[0].y);
           ctx.lineTo(points[1].x, points[1].y);

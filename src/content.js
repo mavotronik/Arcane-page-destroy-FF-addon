@@ -2,7 +2,7 @@
   if (window.top !== window) return;
 
   const T_HOLE = 1.079;
-  const T_FALL = 3.25;
+  const T_FALL = 3.073;
   const RESTORE_MS = 800;
   const VIDEO_URL = browser.runtime.getURL("arcane_ultimate_2_arcane-only.mp4");
   const STAGE_CSS = `
