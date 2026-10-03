@@ -6,28 +6,6 @@
   const ROWS = 12;
   const DEFAULT_END = 4.458;
 
-  const VERT = `
-    attribute vec2 a_pos;
-    attribute vec2 a_uv;
-    uniform vec2 u_resolution;
-    varying vec2 v_uv;
-    void main() {
-      vec2 clip = (a_pos / u_resolution) * 2.0 - 1.0;
-      clip.y = -clip.y;
-      gl_Position = vec4(clip, 0.0, 1.0);
-      v_uv = a_uv;
-    }
-  `;
-
-  const FRAG = `
-    precision mediump float;
-    uniform sampler2D u_tex;
-    varying vec2 v_uv;
-    void main() {
-      gl_FragColor = texture2D(u_tex, v_uv);
-    }
-  `;
-
   function clamp01(value) {
     return Math.min(1, Math.max(0, value));
   }
@@ -149,69 +127,39 @@ function parseColor(input) {
     return { dx, dy, rot, gap };
   }
 
+  function drawTriangle(ctx, image, p0, p1, p2) {
+    const denom = p0.sx * (p1.sy - p2.sy) + p1.sx * (p2.sy - p0.sy) + p2.sx * (p0.sy - p1.sy);
+    if (Math.abs(denom) < 0.001) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.closePath();
+    ctx.clip();
+    const a = (p0.x * (p1.sy - p2.sy) + p1.x * (p2.sy - p0.sy) + p2.x * (p0.sy - p1.sy)) / denom;
+    const b = (p0.y * (p1.sy - p2.sy) + p1.y * (p2.sy - p0.sy) + p2.y * (p0.sy - p1.sy)) / denom;
+    const c = (p0.x * (p2.sx - p1.sx) + p1.x * (p0.sx - p2.sx) + p2.x * (p1.sx - p0.sx)) / denom;
+    const d = (p0.y * (p2.sx - p1.sx) + p1.y * (p0.sx - p2.sx) + p2.y * (p1.sx - p0.sx)) / denom;
+    const e = (p0.x * (p1.sx * p2.sy - p2.sx * p1.sy) + p1.x * (p2.sx * p0.sy - p0.sx * p2.sy) + p2.x * (p0.sx * p1.sy - p1.sx * p0.sy)) / denom;
+    const f = (p0.y * (p1.sx * p2.sy - p2.sx * p1.sy) + p1.y * (p2.sx * p0.sy - p0.sx * p2.sy) + p2.y * (p0.sx * p1.sy - p1.sx * p0.sy)) / denom;
+    ctx.transform(a, b, c, d, e, f);
+    ctx.drawImage(image, 0, 0);
+    ctx.restore();
+  }
+
   class PageShatter {
     constructor(canvas, image, themeCss) {
       this.canvas = canvas;
+      this.image = image;
+      this.ctx = canvas.getContext("2d", { alpha: false });
+      if (!this.ctx) throw new Error("2d unavailable");
       this.shards = buildShards();
-      this.buffer = new Float32Array(this.shards.length * 3 * 4);
       this.endTime = DEFAULT_END;
       this.color = parseColor(themeCss);
-      this.gl = canvas.getContext("webgl", {
-        alpha: false,
-        antialias: true,
-        depth: false,
-        stencil: false,
-        preserveDrawingBuffer: false
-      });
-      if (!this.gl) throw new Error("webgl unavailable");
       this.width = 1;
       this.height = 1;
-      this.program = this.createProgram();
-      this.uploadTexture(image);
-      this.attribPos = this.gl.getAttribLocation(this.program, "a_pos");
-      this.attribUv = this.gl.getAttribLocation(this.program, "a_uv");
-      this.uniformResolution = this.gl.getUniformLocation(this.program, "u_resolution");
-      this.gl.useProgram(this.program);
-      this.vertexBuffer = this.gl.createBuffer();
       this.resize();
-    }
-
-    createProgram() {
-      const gl = this.gl;
-      const program = gl.createProgram();
-      gl.attachShader(program, this.compile(gl.VERTEX_SHADER, VERT));
-      gl.attachShader(program, this.compile(gl.FRAGMENT_SHADER, FRAG));
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(program) || "link failed");
-      }
-      return program;
-    }
-
-    compile(type, source) {
-      const gl = this.gl;
-      const shader = gl.createShader(type);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        const log = gl.getShaderInfoLog(shader) || "shader failed";
-        gl.deleteShader(shader);
-        throw new Error(log);
-      }
-      return shader;
-    }
-
-    uploadTexture(image) {
-      const gl = this.gl;
-      const texture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-      this.texture = texture;
     }
 
     setTheme(themeCss) {
@@ -223,9 +171,10 @@ function parseColor(input) {
     }
 
     resize() {
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
       const width = Math.max(1, window.innerWidth);
       const height = Math.max(1, window.innerHeight);
+      let dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (Math.max(width, height) * dpr > 1920) dpr = 1920 / Math.max(width, height);
       const pixelWidth = Math.max(1, Math.round(width * dpr));
       const pixelHeight = Math.max(1, Math.round(height * dpr));
       if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
@@ -234,27 +183,29 @@ function parseColor(input) {
       }
       this.width = width;
       this.height = height;
-      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      this.scale = pixelWidth / width;
     }
 
     renderAt(time) {
       this.resize();
-      this.fill(time, null);
-      this.draw();
+      this.paint(time, null);
     }
 
     renderRestore(progress) {
       this.resize();
-      this.fill(this.endTime, clamp01(progress));
-      this.draw();
+      this.paint(this.endTime, clamp01(progress));
     }
 
-    fill(time, restore) {
-      const data = this.buffer;
+    paint(time, restore) {
+      const ctx = this.ctx;
       const w = this.width;
       const h = this.height;
+      const scale = this.scale;
+      const image = this.image;
       const blend = restore === null ? 0 : smooth(restore);
-      let offset = 0;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = this.color.css;
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
       for (let i = 0; i < this.shards.length; i += 1) {
         const shard = this.shards[i];
@@ -265,42 +216,31 @@ function parseColor(input) {
         const gap = end.gap + (1 - end.gap) * blend;
         const cos = Math.cos(rot);
         const sin = Math.sin(rot);
-
-        for (let v = 0; v < 3; v += 1) {
-          const vert = shard.verts[v];
+        const points = shard.verts.map((vert) => {
           const lx = (vert.x - shard.cx) * gap;
           const ly = (vert.y - shard.cy) * gap;
-          data[offset] = (shard.cx + lx * cos - ly * sin) * w + dx;
-          data[offset + 1] = (shard.cy + lx * sin + ly * cos) * h + dy;
-          data[offset + 2] = vert.x;
-          data[offset + 3] = 1 - vert.y;
-          offset += 4;
+          return {
+            x: ((shard.cx + lx * cos - ly * sin) * w + dx) * scale,
+            y: ((shard.cy + lx * sin + ly * cos) * h + dy) * scale,
+            sx: vert.x * image.width,
+            sy: vert.y * image.height
+          };
+        });
+        const midX = (points[0].x + points[1].x + points[2].x) / 3;
+        const midY = (points[0].y + points[1].y + points[2].y) / 3;
+        for (let p = 0; p < points.length; p += 1) {
+          const vx = points[p].x - midX;
+          const vy = points[p].y - midY;
+          const len = Math.hypot(vx, vy) || 1;
+          points[p].x += (vx / len) * 1.4;
+          points[p].y += (vy / len) * 1.4;
         }
+        drawTriangle(ctx, image, points[0], points[1], points[2]);
       }
     }
 
-    draw() {
-      const gl = this.gl;
-      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-      gl.clearColor(this.color.r, this.color.g, this.color.b, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.useProgram(this.program);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, this.buffer, gl.DYNAMIC_DRAW);
-      gl.enableVertexAttribArray(this.attribPos);
-      gl.enableVertexAttribArray(this.attribUv);
-      gl.vertexAttribPointer(this.attribPos, 2, gl.FLOAT, false, 16, 0);
-      gl.vertexAttribPointer(this.attribUv, 2, gl.FLOAT, false, 16, 8);
-      gl.uniform2f(this.uniformResolution, this.width, this.height);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.texture);
-      gl.drawArrays(gl.TRIANGLES, 0, this.shards.length * 3);
-    }
-
     destroy() {
-      const gl = this.gl;
-      const lose = gl.getExtension("WEBGL_lose_context");
-      if (lose) lose.loseContext();
+      this.image = null;
     }
   }
 

@@ -22,11 +22,15 @@
     }
     video {
       object-fit: cover;
-      background: #000;
+      z-index: 1;
+      background: transparent;
+      transform: translateZ(0);
     }
     canvas {
+      z-index: 2;
       opacity: 0;
       pointer-events: none;
+      transform: translateZ(0);
     }
     .stage[data-mode="glass"] canvas,
     .stage[data-mode="restoring"] canvas { opacity: 1; }
@@ -52,6 +56,10 @@
   let shatter = null;
   let themeColor = fallbackTheme();
   let shot;
+  let captureFinished = false;
+  let showWhenCaptured = null;
+  let audio = null;
+  let effectOrigin = 0;
 
   function fallbackTheme() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "#1c1b22" : "#f9f9fb";
@@ -83,28 +91,39 @@
     });
   });
 
-  function loadImage(src) {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(fitTexture(image, 4096));
-      image.onerror = () => reject(new Error("image failed"));
-      image.src = src;
-    });
+  function dataUrlToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(",");
+    const header = dataUrl.slice(0, comma);
+    const mime = (/data:([^;,]+)/.exec(header) || [])[1] || "image/jpeg";
+    const binary = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
   }
 
-  function fitTexture(image, maxSize) {
-    if (image.width <= maxSize && image.height <= maxSize) return image;
-    const scale = maxSize / Math.max(image.width, image.height);
+  function fitTexture(source, maxSize) {
+    const scale = Math.min(1, maxSize / Math.max(source.width, source.height));
     const copy = document.createElement("canvas");
-    copy.width = Math.max(1, Math.round(image.width * scale));
-    copy.height = Math.max(1, Math.round(image.height * scale));
-    copy.getContext("2d").drawImage(image, 0, 0, copy.width, copy.height);
+    copy.width = Math.max(1, Math.round(source.width * scale));
+    copy.height = Math.max(1, Math.round(source.height * scale));
+    const ctx = copy.getContext("2d");
+    ctx.drawImage(source, 0, 0, copy.width, copy.height);
+    if (source.close) source.close();
     return copy;
   }
 
+  function loadImage(src) {
+    return createImageBitmap(dataUrlToBlob(src)).then((bitmap) => fitTexture(bitmap, 1600));
+  }
+
   function videoDuration() {
-    const duration = video ? video.duration : NaN;
+    const duration = (audio && audio.duration) || (video && video.duration);
     return Number.isFinite(duration) && duration > T_FALL ? duration : 4.458;
+  }
+
+  function effectTime() {
+    if (!effectOrigin) return 0;
+    return Math.max(0, (performance.now() - effectOrigin) / 1000);
   }
 
   function setHostVisible(visible) {
@@ -123,6 +142,7 @@
   function teardown() {
     const dyingHost = host;
     const dyingVideo = video;
+    const dyingAudio = audio;
     const dyingShatter = shatter;
     generation += 1;
     window.clearTimeout(holdTimer);
@@ -134,17 +154,24 @@
     canvas = null;
     shatter = null;
     shot = undefined;
+    captureFinished = false;
+    showWhenCaptured = null;
+    audio = null;
+    effectOrigin = 0;
     state = "idle";
+    if (dyingAudio) {
+      dyingAudio.pause();
+      dyingAudio.removeAttribute("src");
+      dyingAudio.load();
+    }
     if (dyingVideo) {
       dyingVideo.pause();
       dyingVideo.removeAttribute("src");
       dyingVideo.load();
+      dyingVideo.remove();
     }
     if (dyingShatter) dyingShatter.destroy();
-    if (dyingHost) {
-      try { dyingHost.hidePopover(); } catch (error) { /* popover is optional */ }
-      dyingHost.remove();
-    }
+    if (dyingHost) dyingHost.remove();
     if (pendingSettings) {
       applySettings(pendingSettings);
       pendingSettings = null;
@@ -164,11 +191,58 @@
     style.setProperty("z-index", "2147483646", "important");
     style.setProperty("max-width", "none", "important");
     style.setProperty("max-height", "none", "important");
+    style.setProperty("display", "block", "important");
   }
 
-  function buildOverlay() {
+  function createVideo() {
+    const element = document.createElement("video");
+    element.src = VIDEO_URL;
+    element.muted = true;
+    element.playsInline = true;
+    element.preload = "auto";
+    element.addEventListener("error", onVideoError);
+    return element;
+  }
+
+  function presentVideo() {
+    if (!video) return;
+    const style = video.style;
+    style.setProperty("display", "block", "important");
+    style.setProperty("position", "absolute", "important");
+    style.setProperty("inset", "0", "important");
+    style.setProperty("width", "100%", "important");
+    style.setProperty("height", "100%", "important");
+    style.setProperty("opacity", "1", "important");
+    style.setProperty("object-fit", "cover", "important");
+    style.setProperty("transform", "translateZ(0)", "important");
+    style.setProperty("background", "transparent", "important");
+    style.setProperty("z-index", "1", "important");
+    style.setProperty("pointer-events", "none", "important");
+  }
+
+  function concealVideo() {
+    if (!video) return;
+    video.pause();
+    video.style.setProperty("opacity", "0", "important");
+    video.style.setProperty("display", "none", "important");
+  }
+
+  function showCanvas() {
+    if (!canvas) return;
+    const style = canvas.style;
+    style.setProperty("display", "block", "important");
+    style.setProperty("position", "absolute", "important");
+    style.setProperty("inset", "0", "important");
+    style.setProperty("width", "100%", "important");
+    style.setProperty("height", "100%", "important");
+    style.setProperty("opacity", "1", "important");
+    style.setProperty("z-index", "2", "important");
+    style.setProperty("transform", "translateZ(0)", "important");
+  }
+
+  function buildStage() {
+    if (host) return;
     host = document.createElement("arcane-shatter");
-    host.setAttribute("popover", "manual");
     paintHost();
     const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
@@ -177,19 +251,20 @@
     stage.className = "stage";
     stage.dataset.mode = "cover";
     stage.style.setProperty("--theme", themeColor);
-    video = document.createElement("video");
-    video.src = VIDEO_URL;
-    video.playsInline = true;
-    video.preload = "auto";
-    video.volume = 0;
-    video.addEventListener("ended", onVideoEnded);
-    video.addEventListener("error", onVideoError);
+    video = createVideo();
     canvas = document.createElement("canvas");
     stage.append(video, canvas);
     shadow.append(style, stage);
     document.documentElement.append(host);
-    try { host.showPopover(); } catch (error) { /* fixed layer still covers the page */ }
     setHostVisible(false);
+  }
+
+  function flushShow() {
+    captureFinished = true;
+    if (!showWhenCaptured) return;
+    const show = showWhenCaptured;
+    showWhenCaptured = null;
+    show();
   }
 
   function beginArm() {
@@ -197,21 +272,27 @@
     state = "arming";
     themeColor = fallbackTheme();
     shot = undefined;
+    captureFinished = false;
+    showWhenCaptured = null;
     shatter = null;
-    buildOverlay();
 
     browser.runtime.sendMessage({ type: "capture" })
       .then((res) => {
+        if (gen !== generation) return null;
         if (!res || !res.ok || typeof res.dataUrl !== "string") throw new Error("capture failed");
         return loadImage(res.dataUrl);
       })
       .then((image) => {
-        if (gen !== generation) return;
+        if (gen !== generation || image == null) return;
         shot = image;
       })
       .catch(() => {
         if (gen !== generation) return;
         shot = null;
+      })
+      .then(() => {
+        if (gen !== generation) return;
+        flushShow();
       });
 
     browser.runtime.sendMessage({ type: "themeColor" })
@@ -223,7 +304,11 @@
       })
       .catch(() => {});
 
-    const started = video.play();
+    audio = new Audio(VIDEO_URL);
+    audio.preload = "auto";
+    audio.volume = 0;
+    audio.addEventListener("ended", onAudioEnded);
+    const started = audio.play();
     if (started) started.catch(() => {});
     holdTimer = window.setTimeout(() => {
       if (gen === generation && state === "arming") commit(gen);
@@ -231,84 +316,74 @@
   }
 
   function commit(gen) {
-    if (gen !== generation || state !== "arming" || !video) return;
+    if (gen !== generation || state !== "arming") return;
     state = "covering";
+    const mount = () => revealCover(gen);
+    if (captureFinished) mount();
+    else showWhenCaptured = mount;
+  }
+
+  function revealCover(gen) {
+    if (gen !== generation || state !== "covering") return;
+    buildStage();
+    presentVideo();
     let revealed = false;
     let aligned = false;
     const reveal = () => {
-      if (revealed || gen !== generation || !video || !host) return;
+      if (revealed || gen !== generation || !host) return;
       if (state !== "covering" && state !== "shattering" && state !== "falling") return;
       revealed = true;
-      video.volume = 1;
+      effectOrigin = performance.now();
+      if (audio) {
+        try { audio.currentTime = 0; } catch (error) { /* metadata may still be loading */ }
+        audio.volume = 1;
+        const sound = audio.play();
+        if (sound) sound.catch(() => {});
+      }
+      if (video) {
+        try { video.currentTime = 0; } catch (error) { /* picture is optional */ }
+        const picture = video.play();
+        if (picture) picture.catch(() => {});
+      }
       setHostVisible(true);
       if (!raf) raf = requestAnimationFrame(tick);
     };
     const alignAndReveal = () => {
-      if (aligned || gen !== generation || !video) return;
+      if (aligned || gen !== generation) return;
       aligned = true;
-      if (video.currentTime < 0.02) {
-        reveal();
-        return;
-      }
-      video.addEventListener("seeked", reveal, { once: true });
-      try {
-        video.currentTime = 0;
-      } catch (error) {
-        reveal();
-      }
+      reveal();
     };
-    if (video.readyState >= 1) alignAndReveal();
-    else video.addEventListener("loadedmetadata", alignAndReveal, { once: true });
+    if (audio && audio.readyState >= 1) alignAndReveal();
+    else if (audio) audio.addEventListener("loadedmetadata", alignAndReveal, { once: true });
+    else alignAndReveal();
     window.setTimeout(alignAndReveal, 400);
-    window.setTimeout(reveal, 1000);
-    const playing = video.play();
-    if (playing) playing.catch(() => {});
   }
 
   function maybeStartGlass(time) {
-    if (shatter || shot === undefined || shot === null) return;
+    if (shatter || shot === undefined || shot === null || !canvas) return;
     const image = shot;
+    stage.dataset.mode = "glass";
+    showCanvas();
     try {
       shatter = new PageShatter(canvas, image, themeColor);
       shatter.setEndTime(videoDuration());
-      stage.dataset.mode = "glass";
       state = time >= T_FALL ? "falling" : "shattering";
       shatter.renderAt(Math.max(time, T_HOLE));
+      concealVideo();
     } catch (error) {
       shatter = null;
       shot = null;
+      if (stage) stage.dataset.mode = "theme";
     }
   }
 
   function onVideoError(event) {
-    if (event.target !== video) return;
-    if (state === "idle" || state === "restoring") return;
-    if (!shatter) {
-      teardown();
-      return;
-    }
-    if (stage) stage.dataset.mode = "theme";
-    state = "fallen";
-    stopRaf();
+    if (!video || event.target !== video) return;
   }
 
-  function tick() {
-    raf = 0;
-    if (!video || (state !== "covering" && state !== "shattering" && state !== "falling")) return;
-    const time = video.currentTime || 0;
-    if (state === "covering" && time >= T_HOLE) maybeStartGlass(time);
-    if (shatter && (state === "shattering" || state === "falling")) {
-      shatter.renderAt(time);
-      if (state === "shattering" && time >= T_FALL) state = "falling";
-    }
-    if (state === "covering" || state === "shattering" || state === "falling") {
-      raf = requestAnimationFrame(tick);
-    }
-  }
-
-  function onVideoEnded(event) {
-    if (event.target !== video) return;
-    if (state === "idle" || state === "arming" || state === "restoring") return;
+  function finishFallen() {
+    if (state === "idle" || state === "arming" || state === "restoring" || state === "fallen") return;
+    concealVideo();
     if (shatter) {
       shatter.setEndTime(videoDuration());
       shatter.renderAt(videoDuration());
@@ -319,15 +394,47 @@
     stopRaf();
   }
 
+  function onAudioEnded() {
+    if (effectTime() + 0.2 >= videoDuration()) finishFallen();
+  }
+
+  function tick() {
+    raf = 0;
+    if (state !== "covering" && state !== "shattering" && state !== "falling") return;
+    const time = effectTime();
+    if (time >= videoDuration()) {
+      finishFallen();
+      return;
+    }
+    if (state === "covering" && time >= T_HOLE) {
+      if (shot) maybeStartGlass(time);
+      else if (shot === null && stage) {
+        concealVideo();
+        stage.dataset.mode = "theme";
+        state = "falling";
+      }
+    }
+    if (shatter && (state === "shattering" || state === "falling")) {
+      shatter.renderAt(time);
+      if (state === "shattering" && time >= T_FALL) state = "falling";
+    }
+    if (state === "covering" || state === "shattering" || state === "falling") {
+      raf = requestAnimationFrame(tick);
+    }
+  }
+
   function startRestore() {
     if (state !== "fallen") return;
     state = "restoring";
+    if (audio) audio.pause();
     if (video) video.pause();
     if (!shatter) {
       teardown();
       return;
     }
     stage.dataset.mode = "restoring";
+    showCanvas();
+    concealVideo();
     const started = performance.now();
     const step = (now) => {
       if (state !== "restoring" || !shatter) return;
