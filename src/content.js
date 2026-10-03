@@ -1,7 +1,7 @@
 (function () {
   if (window.top !== window) return;
 
-  const T_HOLE = 1.079;
+  const T_HOLE = 1.65;
   const T_FALL = 3.073;
   const RESTORE_MS = 800;
   const VIDEO_URL = browser.runtime.getURL("arcane_ultimate_2_arcane-only.mp4");
@@ -310,6 +310,10 @@
     audio.addEventListener("ended", onAudioEnded);
     const started = audio.play();
     if (started) started.catch(() => {});
+    buildStage();
+    presentVideo();
+    const picture = video.play();
+    if (picture) picture.catch(() => {});
     holdTimer = window.setTimeout(() => {
       if (gen === generation && state === "arming") commit(gen);
     }, holdMs);
@@ -328,7 +332,6 @@
     buildStage();
     presentVideo();
     let revealed = false;
-    let aligned = false;
     const reveal = () => {
       if (revealed || gen !== generation || !host) return;
       if (state !== "covering" && state !== "shattering" && state !== "falling") return;
@@ -341,22 +344,41 @@
         if (sound) sound.catch(() => {});
       }
       if (video) {
-        try { video.currentTime = 0; } catch (error) { /* picture is optional */ }
         const picture = video.play();
         if (picture) picture.catch(() => {});
       }
       setHostVisible(true);
       if (!raf) raf = requestAnimationFrame(tick);
     };
-    const alignAndReveal = () => {
-      if (aligned || gen !== generation) return;
-      aligned = true;
-      reveal();
+    const onFirstFrame = () => {
+      if (!video || revealed || gen !== generation) {
+        reveal();
+        return;
+      }
+      if (typeof video.requestVideoFrameCallback === "function") {
+        video.requestVideoFrameCallback(() => reveal());
+      } else {
+        reveal();
+      }
+      window.setTimeout(reveal, 180);
     };
-    if (audio && audio.readyState >= 1) alignAndReveal();
-    else if (audio) audio.addEventListener("loadedmetadata", alignAndReveal, { once: true });
-    else alignAndReveal();
-    window.setTimeout(alignAndReveal, 400);
+    const restartPicture = () => {
+      if (gen !== generation || !video) {
+        reveal();
+        return;
+      }
+      try { video.currentTime = 0; } catch (error) { /* seek when the file is ready */ }
+      if (video.seeking) video.addEventListener("seeked", onFirstFrame, { once: true });
+      else onFirstFrame();
+      const picture = video.play();
+      if (picture) picture.catch(() => reveal());
+    };
+    if (!video) reveal();
+    else if (video.readyState >= 1) restartPicture();
+    else {
+      video.addEventListener("loadedmetadata", restartPicture, { once: true });
+      window.setTimeout(restartPicture, 400);
+    }
   }
 
   function maybeStartGlass(time) {
@@ -367,8 +389,11 @@
     try {
       shatter = new PageShatter(canvas, image, themeColor);
       shatter.setEndTime(videoDuration());
-      state = time >= T_FALL ? "falling" : "shattering";
-      shatter.renderAt(Math.max(time, T_HOLE));
+      const played = video && Number.isFinite(video.currentTime) ? video.currentTime : time;
+      const aligned = Math.max(T_HOLE, Math.min(time, played));
+      effectOrigin = performance.now() - aligned * 1000;
+      state = aligned >= T_FALL ? "falling" : "shattering";
+      shatter.renderAt(aligned);
       concealVideo();
     } catch (error) {
       shatter = null;
@@ -406,7 +431,8 @@
       finishFallen();
       return;
     }
-    if (state === "covering" && time >= T_HOLE) {
+    const played = video && Number.isFinite(video.currentTime) ? video.currentTime : time;
+    if (state === "covering" && time >= T_HOLE && (played + 0.08 >= T_HOLE || time >= T_HOLE + 0.45)) {
       if (shot) maybeStartGlass(time);
       else if (shot === null && stage) {
         concealVideo();

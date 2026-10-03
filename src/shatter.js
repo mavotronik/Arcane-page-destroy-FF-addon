@@ -1,5 +1,5 @@
 (function () {
-  const T_HOLE = 1.079;
+  const T_HOLE = 1.65;
   const T_CRACK = 2.42;
   const T_PHASE3 = 3.073;
   const T_FALL = T_PHASE3 + 0.12;
