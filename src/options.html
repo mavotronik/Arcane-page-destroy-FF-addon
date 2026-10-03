@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Arcane Page Destroy</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f9f9fb;
+        --text: #15141a;
+        --muted: #5b5b66;
+        --field: #ffffff;
+        --line: #cfcfd8;
+        --accent: #5b4b8a;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1b22;
+          --text: #fbfbfe;
+          --muted: #cfcfd8;
+          --field: #2b2a33;
+          --line: #52525e;
+          --accent: #c7b6ff;
+        }
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.45 system-ui, sans-serif;
+      }
+
+      main {
+        max-width: 36rem;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 3rem;
+      }
+
+      h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.4rem;
+      }
+
+      .lead {
+        margin: 0 0 1.5rem;
+        color: var(--muted);
+      }
+
+      .row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        margin-bottom: 1.1rem;
+      }
+
+      .label {
+        font-weight: 600;
+      }
+
+      .hint {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      button,
+      input {
+        font: inherit;
+        color: inherit;
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      #hotkey {
+        text-align: left;
+        padding: 0.65rem 0.8rem;
+        cursor: pointer;
+      }
+
+      #hotkey:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      #hold {
+        width: 8rem;
+        padding: 0.55rem 0.7rem;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        margin-top: 0.4rem;
+      }
+
+      #reset {
+        padding: 0.5rem 0.85rem;
+        cursor: pointer;
+      }
+
+      #status {
+        min-height: 1.2em;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Arcane Page Destroy</h1>
+      <p class="lead">Удержание клавиши запускает ролик и разбивает вкладку. То же нажатие после обрушения собирает страницу.</p>
+
+      <div class="row">
+        <span class="label" id="hotkey-label">Клавиша</span>
+        <button id="hotkey" type="button" aria-labelledby="hotkey-label">F8</button>
+        <p class="hint">Нажмите поле и затем клавишу. Сохраняется код клавиши, раскладка не важна.</p>
+      </div>
+
+      <div class="row">
+        <label class="label" for="hold">Удержание, мс</label>
+        <input id="hold" type="number" min="100" max="3000" step="50" value="600">
+        <p class="hint">От 100 до 3000. Короткое нажатие эффект не запускает.</p>
+      </div>
+
+      <div class="actions">
+        <button id="reset" type="button">Сброс</button>
+        <span id="status" role="status"></span>
+      </div>
+    </main>
+    <script src="defaults.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
